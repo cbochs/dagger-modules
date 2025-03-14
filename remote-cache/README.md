@@ -2,7 +2,7 @@
 
 Remotely cache Dagger volumes and directories.
 
-> [!WARN]
+> [!WARNING]
 > This doesn't work as a module right now because modules cannot export
 > functions which return `dagger.WithContainerFunc`. Until then, this module
 > remains purely as an example project.
