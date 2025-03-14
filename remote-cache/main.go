@@ -2,48 +2,58 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"time"
 )
 
-const CacheKey = "8668e22b-07c9-4b90-b6de-e15738864818"
-
-func TtlKeyFormatter(registry, repo, key, arch string) string {
-	return fmt.Sprintf("%s/%s:2h", registry, CacheKey)
+type RemoteCache struct {
+	Cache      *Cache // +private
+	ExampleKey string // +private
 }
 
-type RemoteCache struct{}
+func New(
+	// +default="ttl.sh"
+	registry string, // +optional
+
+	// +default="8668e22b-07c9-4b90-b6de-e15738864818"
+	repo string, // +optional
+
+	// +optional
+	skipIfExists bool, // +optional
+
+	// +default="2h"
+	exampleKey string, // +optional
+) RemoteCache {
+	cache := NewCache().WithRemote(registry, repo)
+	if skipIfExists {
+		cache = cache.WithSkipIfExists()
+	}
+
+	return RemoteCache{
+		Cache:      cache,
+		ExampleKey: exampleKey,
+	}
+}
 
 func (m RemoteCache) PrimeCache(ctx context.Context) error {
-	cache := NewCache().
-		WithRemote("ttl.sh", "").
-		WithSkipIfExists().
-		WithKeyFormatter(TtlKeyFormatter)
-
 	ctr := dag.Container().
 		From("alpine").
 		WithEnvVariable("CACHEBUST", time.Now().String()).
-		With(cache.MountedVolume("/example", "example")).
+		With(m.Cache.MountedVolume("/example", m.ExampleKey)).
 		WithExec([]string{"sh", "-c", "echo 'Hello, world' > /example/foo"})
 
-	ctr, err := cache.Sync(ctx, ctr)
+	ctr, err := m.Cache.Sync(ctx, ctr)
 
 	return err
 }
 
 func (m RemoteCache) CheckCache(ctx context.Context) (string, error) {
-	cache := NewCache().
-		WithRemote("ttl.sh", "").
-		WithSkipIfExists().
-		WithKeyFormatter(TtlKeyFormatter)
-
 	ctr := dag.Container().
 		From("alpine").
 		WithEnvVariable("CACHEBUST", time.Now().String()).
-		With(cache.MountedVolume("/example", "example")).
+		With(m.Cache.MountedVolume("/example", m.ExampleKey)).
 		WithExec([]string{"sh", "-c", "cat /example/foo || echo 'CACHE MISS'"})
 
-	err := cache.Download(ctx)
+	err := m.Cache.Download(ctx)
 	if err != nil {
 		return "", err
 	}

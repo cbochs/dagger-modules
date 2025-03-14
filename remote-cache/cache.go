@@ -15,7 +15,6 @@ type Cache struct {
 	Repo         string                 // +private
 	SkipIfExists bool                   // +private
 	VolumeMounts map[string]VolumeMount // +private
-	CacheKey     KeyFormatter           // +private
 }
 
 type VolumeMount struct {
@@ -26,16 +25,9 @@ type VolumeMount struct {
 	Opts      []dagger.ContainerWithMountedCacheOpts // +private
 }
 
-type KeyFormatter func(registry string, repo string, key string, arch string) string
-
-func DefaultKeyFormatter(registry, repo, key, arch string) string {
-	return fmt.Sprintf("%s/%s:%s-%s", registry, repo, key, arch)
-}
-
 func NewCache() *Cache {
 	return &Cache{
 		VolumeMounts: make(map[string]VolumeMount),
-		CacheKey:     DefaultKeyFormatter,
 	}
 }
 
@@ -49,12 +41,6 @@ func (cache *Cache) WithRemote(registry string, repo string) *Cache {
 func (cache *Cache) WithSkipIfExists() *Cache {
 	c := *cache
 	c.SkipIfExists = true
-	return &c
-}
-
-func (cache *Cache) WithKeyFormatter(f KeyFormatter) *Cache {
-	c := *cache
-	c.CacheKey = f
 	return &c
 }
 
@@ -110,8 +96,8 @@ func (cache *Cache) Download(ctx context.Context) error {
 		}
 		arch := strings.Split(string(platform), "/")[1]
 
-		imageAddr := cache.CacheKey(cache.Registry, cache.Repo, mnt.Key, arch)
-		if !cache.imageExists(ctx, imageAddr) {
+		imageAddr := cacheKeyAddr(cache.Registry, cache.Repo, mnt.Key, arch)
+		if !cacheKeyExists(ctx, imageAddr) {
 			continue
 		}
 
@@ -149,8 +135,8 @@ func (cache *Cache) Upload(ctx context.Context) error {
 		}
 		arch := strings.Split(string(platform), "/")[1]
 
-		imageAddr := cache.CacheKey(cache.Registry, cache.Repo, mnt.Key, arch)
-		if cache.imageExists(ctx, imageAddr) && cache.SkipIfExists {
+		imageAddr := cacheKeyAddr(cache.Registry, cache.Repo, mnt.Key, arch)
+		if cacheKeyExists(ctx, imageAddr) && cache.SkipIfExists {
 			continue
 		}
 
@@ -188,7 +174,12 @@ func (cache *Cache) Sync(ctx context.Context, ctr *dagger.Container) (*dagger.Co
 	return ctr, nil
 }
 
-func (cache *Cache) imageExists(ctx context.Context, address string) bool {
+func cacheKeyAddr(registry string, repo string, key string, arch string) string {
+	return fmt.Sprintf("%s/%s:%s", registry, repo, key)
+	// return fmt.Sprintf("%s/%s:%s-%s", registry, repo, key, arch)
+}
+
+func cacheKeyExists(ctx context.Context, address string) bool {
 	imageName := "docker://" + address
 	imageRef, err := alltransports.ParseImageName(imageName)
 	if err != nil {
