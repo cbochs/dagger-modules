@@ -7,6 +7,31 @@ Remotely cache Dagger volumes and directories.
 > functions which return `dagger.WithContainerFunc`. Until then, this module
 > remains purely as an example project.
 
+### Expected Use-Case
+
+This is expected to be an (almost) drop-in replacement for `WithMountedCache`.
+
+For example, instead of
+
+```go
+dag.Container().WithMountedCache("/example", dag.CacheVolume("example"))
+```
+
+Use
+
+```go
+cache := NewCache().WithRemote("my-registry.com", "cache")
+
+ctr := dag.Container().With(cache.MountedVolume("/example", "example"))
+
+// Build the rest of your container...
+
+ctr, err := cache.Sync(ctx, ctr)
+if err != nil {
+    return nil, err
+}
+```
+
 ## Example
 
 Begin by generating a unique cache repo for the example.
