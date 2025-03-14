@@ -2,25 +2,30 @@
 
 Remotely cache Dagger volumes and directories.
 
-> [!NOTE]
+> [!WARN]
 > This doesn't work as a module right now because modules cannot export
 > functions which return `dagger.WithContainerFunc`. Until then, this module
 > remains purely as an example project.
 
 ## Example
 
-Begin by generating a cache key for the example.
+Begin by generating a unique cache repo for the example.
 
 ```sh
-export CACHE_KEY=$(uuidgen)
+export CACHE_REPO=$(uuidgen)
 ```
 
 Let's check the cache to ensure it doesn't already exist. We should see `CACHE MISS` be printed.
 
+> [!NOTE]
+> Some of the input may be odd here. The cache key we choose will end up being
+> the resulting image tag. In this case, since we're using `ttl.sh`, a cache
+> key of `2h` (image expiry of 2 hours) is what we're inputting.
+
 ```sh
 dagger call -m github.com/cbochs/dagger-modules/remote-cache \
     --registry ttl.sh \
-    --repo $CACHE_KEY \
+    --repo $CACHE_REPO \
     --cache-key 2h \
     check-cache
 ```
@@ -30,7 +35,7 @@ Next, let's prime the cache with a file called `foo` and the contents `Hello, wo
 ```sh
 dagger call -m github.com/cbochs/dagger-modules/remote-cache \
     --registry ttl.sh \
-    --repo $CACHE_KEY \
+    --repo $CACHE_REPO \
     --cache-key 2h \
     prime-cache
 ```
@@ -51,7 +56,7 @@ remotely. Let's see if we get can retrieve the contents we stored remotely.
 
 dagger call -m github.com/cbochs/dagger-modules/remote-cache \
     --registry ttl.sh \
-    --repo $CACHE_KEY \
+    --repo $CACHE_REPO \
     --cache-key 2h \
     check-cache
 # Prints: Hello, world!
