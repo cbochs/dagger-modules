@@ -2,12 +2,13 @@ package main
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
 type RemoteCache struct {
-	Cache      *Cache // +private
-	ExampleKey string // +private
+	Cache    *Cache // +private
+	CacheKey string // +private
 }
 
 func New(
@@ -21,16 +22,16 @@ func New(
 	skipIfExists bool, // +optional
 
 	// +default="2h"
-	exampleKey string, // +optional
+	cacheKey string, // +optional
 ) RemoteCache {
-	cache := NewCache().WithRemote(registry, repo)
+	cache := NewCache().WithRemote(registry, strings.ToLower(repo))
 	if skipIfExists {
 		cache = cache.WithSkipIfExists()
 	}
 
 	return RemoteCache{
-		Cache:      cache,
-		ExampleKey: exampleKey,
+		Cache:    cache,
+		CacheKey: cacheKey,
 	}
 }
 
@@ -38,7 +39,7 @@ func (m RemoteCache) PrimeCache(ctx context.Context) error {
 	ctr := dag.Container().
 		From("alpine").
 		WithEnvVariable("CACHEBUST", time.Now().String()).
-		With(m.Cache.MountedVolume("/example", m.ExampleKey)).
+		With(m.Cache.MountedVolume("/example", m.CacheKey)).
 		WithExec([]string{"sh", "-c", "echo 'Hello, world' > /example/foo"})
 
 	ctr, err := m.Cache.Sync(ctx, ctr)
@@ -50,7 +51,7 @@ func (m RemoteCache) CheckCache(ctx context.Context) (string, error) {
 	ctr := dag.Container().
 		From("alpine").
 		WithEnvVariable("CACHEBUST", time.Now().String()).
-		With(m.Cache.MountedVolume("/example", m.ExampleKey)).
+		With(m.Cache.MountedVolume("/example", m.CacheKey)).
 		WithExec([]string{"sh", "-c", "cat /example/foo || echo 'CACHE MISS'"})
 
 	err := m.Cache.Download(ctx)
