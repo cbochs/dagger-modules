@@ -228,7 +228,7 @@ func (m *Openwrt) Diff(
 	}
 
 	oldMap := make(map[string]string)
-	for _, line := range strings.Split(oldStr, "\n") {
+	for line := range strings.SplitSeq(oldStr, "\n") {
 		if line == "" {
 			continue
 		}
@@ -239,11 +239,11 @@ func (m *Openwrt) Diff(
 	}
 
 	newMap := make(map[string]string)
-	for _, line := range strings.Split(newStr, "\n") {
+	for line := range strings.SplitSeq(newStr, "\n") {
 		if line == "" {
 			continue
 		}
-		parts := strings.SplitN(line, " ", 2)
+		parts := strings.SplitN(line, " - ", 2)
 		if len(parts) == 2 {
 			newMap[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
 		}
