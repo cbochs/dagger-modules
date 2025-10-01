@@ -1,0 +1,33 @@
+# Create a non-privileged admin user and lock root password. Configure
+# privilege elevation with sudo. Set up key-based authentication and disable
+# password authentication for Dropbear.
+#
+# Requires: shadow, sudo
+#
+# Reference: https://openwrt.org/docs/guide-user/additional-software/imagebuilder#restricting_root_access
+
+USER_NAME="{{ .Name }}"
+USER_SSHPUB="{{ .PubKey }}"
+USER_SHELL="/bin/ash"
+SUDO_USER="root"
+SUDO_GROUP="sudo"
+
+groupadd -r "$SUDO_GROUP"
+useradd -m -G "$SUDO_GROUP" -s "$USER_SHELL" "$USER_NAME"
+passwd -l "$SUDO_USER"
+
+cat << EOI > /etc/sudoers.d/00-custom
+%${SUDO_GROUP} ALL=(ALL) ALL
+EOI
+
+USER_HOME="$(eval echo ~"${USER_NAME}")"
+mkdir -p "${USER_HOME}"/.ssh
+cat << EOI > "${USER_HOME}"/.ssh/authorized_keys
+${USER_SSHPUB}
+EOI
+
+uci set dropbear.@dropbear[0].PasswordAuth="0"
+uci set dropbear.@dropbear[0].RootPasswordAuth="0"
+uci commit dropbear
+
+/etc/init.d/dropbear restart

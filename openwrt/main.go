@@ -1,17 +1,22 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
+	"text/template"
 
 	"dagger/openwrt/internal/dagger"
 )
 
 type Openwrt struct {
-	Version string
-	Target  string
+	Version           string
+	Target            string
+	UCIPackages       []string
+	UCIDefaultScripts []*dagger.File
 }
 
 func New(
@@ -26,6 +31,50 @@ func New(
 		Version: version,
 		Target:  target,
 	}
+}
+
+func (m *Openwrt) WithNonPrivilegedUser(
+	ctx context.Context,
+	// Non-privileged user name
+	name string,
+	// Non-privileged SSH public key
+	pubkey *dagger.File,
+	// +defaultPath="./files/99-non-privileged-user.tmpl"
+	tmpl *dagger.File,
+) (*Openwrt, error) {
+	tmplContents, err := tmpl.Contents(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	t, err := template.New("").Parse(tmplContents)
+	if err != nil {
+		return nil, err
+	}
+
+	pubkeyContents, err := pubkey.Contents(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	data := struct {
+		Name   string
+		PubKey string
+	}{name, pubkeyContents}
+
+	var result bytes.Buffer
+	if err := t.Execute(&result, data); err != nil {
+		return nil, err
+	}
+
+	userScript := dag.File("99-create-non-privileged-user", result.String())
+
+	return &Openwrt{
+		Version:           m.Version,
+		Target:            m.Target,
+		UCIPackages:       slices.Concat(slices.Clone(m.UCIPackages), []string{"shadow", "sudo"}),
+		UCIDefaultScripts: append(slices.Clone(m.UCIDefaultScripts), userScript),
+	}, nil
 }
 
 func (m *Openwrt) Profiles(ctx context.Context) (string, error) {
@@ -47,7 +96,12 @@ func (m *Openwrt) Build(
 	// +optional
 	rootSizeMB string,
 ) *dagger.Directory {
+	ctr := m.ImageBuilder()
 	cmd := []string{"make", "image"}
+
+	packages = append(packages, m.UCIPackages...)
+	slices.Sort(packages)
+	packages = slices.Compact(packages)
 
 	if profile != "" {
 		cmd = append(cmd, fmt.Sprintf("PROFILE=%s", profile))
@@ -61,8 +115,12 @@ func (m *Openwrt) Build(
 	if rootSizeMB != "" {
 		cmd = append(cmd, fmt.Sprintf("ROOTFS_PARTSIZE=%s", rootSizeMB))
 	}
+	if len(m.UCIDefaultScripts) > 0 {
+		ctr = ctr.WithFiles("files/etc/uci-defaults", m.UCIDefaultScripts)
+		cmd = append(cmd, "FILES=files")
+	}
 
-	return m.ImageBuilder().
+	return ctr.
 		WithExec(cmd).
 		Directory(fmt.Sprintf("bin/targets/%s", m.Target))
 }
@@ -103,13 +161,15 @@ func (m *Openwrt) ImageBuilder() *dagger.Container {
 			"libncurses-dev",
 			"libssl-dev",
 			"python3",
-			"python3-setuptools", // replaces python3-distutils?
 			"rsync",
 			"unzip",
 			"wget",
 			"xsltproc",
 			"zlib1g-dev",
 			"zstd",
+			// NOTE: Replaces python3-distutils?
+			// Reference: https://openwrt.org/docs/guide-user/additional-software/imagebuilder#debianubuntumint
+			"python3-setuptools",
 		})
 
 	tarball := imageBuilderTarball(m.Version, m.Target)
