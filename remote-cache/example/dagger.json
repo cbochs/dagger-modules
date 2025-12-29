@@ -6,6 +6,10 @@
   },
   "dependencies": [
     {
+      "name": "remote-backend",
+      "source": "../../remote-backend"
+    },
+    {
       "name": "remote-cache",
       "source": ".."
     }

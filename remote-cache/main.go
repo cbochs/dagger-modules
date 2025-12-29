@@ -15,7 +15,7 @@ import (
 const mountLabelPrefix = "dagger.remote-cache.mount."
 
 type RemoteCache struct {
-	Backend *Backend // +private
+	Backend Backend // +private
 }
 
 type VolumeMount struct {
@@ -31,8 +31,7 @@ type MountMetadata struct {
 	PlatformAware bool
 }
 
-func New(registry string, repo string) *RemoteCache {
-	backend := NewRegistry(registry, repo)
+func New(backend Backend) *RemoteCache {
 	return &RemoteCache{
 		Backend: backend,
 	}
@@ -75,21 +74,17 @@ func (m *RemoteCache) CacheVolume(
 
 // +cache="session"
 func (mnt VolumeMount) Mount(ctx context.Context, ctr *dagger.Container) (*dagger.Container, error) {
+	ctr = ctr.WithMountedCache(mnt.Meta.Path, mnt.Volume, mnt.Opts...)
+
+	// Copy the contents of the imported cache directory into the cache volume.
 	key, err := labelKey(ctx, ctr, mnt.Meta)
 	if err != nil {
 		return nil, err
 	}
 
-	dir, err := mnt.Cache.Backend.Import(ctx, key)
-	if err != nil {
-		return ctr, nil
-	}
+	tmp := "/tmp/cache-import-" + key
+	dir := mnt.Cache.Backend.Import(ctx, key)
 
-	ctr = ctr.WithMountedCache(mnt.Meta.Path, mnt.Volume, mnt.Opts...)
-
-	// Copy the contents of the imported cache directory into the cache volume.
-	copyCtx, copySpan := Tracer().Start(ctx, fmt.Sprintf("copyCache(name: %q)", key))
-	tmp := "/tmp/cache-import-" + mnt.Meta.Key
 	_, err = ctr.
 		WithMountedDirectory(tmp, dir).
 		WithExec([]string{"find", mnt.Meta.Path, "-mindepth", "1", "-delete"}).
@@ -102,8 +97,7 @@ func (mnt VolumeMount) Mount(ctx context.Context, ctr *dagger.Container) (*dagge
 			mnt.Meta.Path,
 		}).
 		WithoutMount(tmp).
-		Sync(copyCtx)
-	telemetry.EndWithCause(copySpan, &err)
+		Sync(ctx)
 	if err != nil {
 		return ctr, nil
 	}

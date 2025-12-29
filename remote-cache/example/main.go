@@ -22,7 +22,8 @@ func New(
 	// +default="2h"
 	cacheKey string, // +optional
 ) Example {
-	cache := dag.RemoteCache(registry, repo)
+	backend := dag.RemoteBackend().Registry(registry, repo)
+	cache := dag.RemoteCache(backend.AsRemoteCacheBackend())
 	// if skipIfExists {
 	// 	cache = cache.WithSkipIfExists()
 	// }
