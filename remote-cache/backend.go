@@ -14,6 +14,7 @@ import (
 )
 
 // type Backend interface {
+// 	Key(ctx context.Context, meta CacheMetadata, ctr *dagger.Container) (string, error)
 // 	Exists(ctx context.Context, key string) bool
 // 	Import(ctx context.Context, key string) (*dagger.Directory, error)
 // 	Export(ctx context.Context, key string, dir *dagger.Directory) error
@@ -39,32 +40,22 @@ func NewRegistry(registry string, repo string) *Backend {
 // +cache="session"
 func (b *Backend) Exists(ctx context.Context, key string) bool {
 	imageAddr := cacheKeyAddr(b.Registry, b.Repo, key)
-
-	ctx, span := Tracer().Start(ctx, fmt.Sprintf("Backend.exists(key: %q, image: %q)", key, imageAddr))
-	span.SetAttributes(
-		attribute.String("cache.key", key),
-		attribute.String("cache.image", imageAddr),
-	)
-	defer telemetry.EndWithCause(span, nil)
-
 	imageName := "docker://" + imageAddr
 
 	_, parseSpan := Tracer().Start(ctx, "parse image address")
 	imageRef, err := alltransports.ParseImageName(imageName)
+	telemetry.EndWithCause(parseSpan, &err)
 	if err != nil {
-		telemetry.EndWithCause(parseSpan, &err)
 		return false
 	}
-	telemetry.EndWithCause(parseSpan, nil)
 
-	_, fetchSpan := Tracer().Start(ctx, "fetch image metadata")
+	_, fetchSpan := Tracer().Start(ctx, "fetch image manifest")
 	sys := &types.SystemContext{}
 	imageSrc, err := imageRef.NewImageSource(ctx, sys)
+	telemetry.EndWithCause(fetchSpan, &err)
 	if err != nil {
-		telemetry.EndWithCause(fetchSpan, &err)
 		return false
 	}
-	telemetry.EndWithCause(fetchSpan, nil)
 	defer imageSrc.Close()
 
 	return true
@@ -99,7 +90,6 @@ func (b *Backend) Import(ctx context.Context, key string) (*dagger.Directory, er
 // +cache="session"
 func (b *Backend) Export(ctx context.Context, key string, dir *dagger.Directory) error {
 	cacheAddr := cacheKeyAddr(b.Registry, b.Repo, key)
-
 	ctx, span := Tracer().Start(
 		ctx,
 		fmt.Sprintf("Backend.export(key: %q, image: %q)", key, cacheAddr),
@@ -108,9 +98,9 @@ func (b *Backend) Export(ctx context.Context, key string, dir *dagger.Directory)
 			attribute.String("cache.image", cacheAddr),
 		),
 	)
-	defer telemetry.EndWithCause(span, nil)
 
 	_, err := dag.Container().WithDirectory("", dir).Publish(ctx, cacheAddr)
+	telemetry.EndWithCause(span, &err)
 
 	return err
 }

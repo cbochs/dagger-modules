@@ -2,166 +2,206 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"slices"
 	"strings"
 
 	"dagger/remote-cache/internal/dagger"
 	"dagger/remote-cache/internal/telemetry"
 
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
 )
 
+const mountLabelPrefix = "dagger.remote-cache.mount."
+
 type RemoteCache struct {
-	Backend *Backend       // +private
-	Mounts  []*VolumeMount // +private
+	Backend *Backend // +private
 }
 
 type VolumeMount struct {
-	Path      string
-	Key       string
-	Container *dagger.Container                      // +private
-	Platform  dagger.Platform                        // +private
-	Volume    *dagger.CacheVolume                    // +private
-	Opts      []dagger.ContainerWithMountedCacheOpts // +private
+	Cache  *RemoteCache                           // +private
+	Meta   MountMetadata                          // +private
+	Volume *dagger.CacheVolume                    // +private
+	Opts   []dagger.ContainerWithMountedCacheOpts // +private
+}
+
+type MountMetadata struct {
+	Path          string
+	Key           string
+	PlatformAware bool
 }
 
 func New(registry string, repo string) *RemoteCache {
 	backend := NewRegistry(registry, repo)
 	return &RemoteCache{
 		Backend: backend,
-		Mounts:  nil,
 	}
-}
-
-type PendingMount struct {
-	Cache *RemoteCache // +private
-	Mnt   *VolumeMount // +private
 }
 
 // +cache="session"
 func (m *RemoteCache) CacheVolume(
+	// Mount path.
 	path string,
+	// Cache volume key.
 	key string,
-	owner string, // +optional
-) PendingMount {
+	// A user:group to set for the mounted cache directory.
+	// +optional
+	owner string,
+	// Replace "${VAR}" or "$VAR" in the value of path according to the current environment variables defined in the container (e.g. "/$VAR/foo").
+	// +optional
+	expand bool,
+	// +optional
+	platformAware bool,
+) VolumeMount {
 	var opts []dagger.ContainerWithMountedCacheOpts
 	if owner != "" {
 		opts = append(opts, dagger.ContainerWithMountedCacheOpts{Owner: owner})
 	}
-
-	mnt := &VolumeMount{
-		Path:   path,
-		Key:    key,
-		Volume: dag.CacheVolume(key),
-		Opts:   opts,
-		// Container: ctr,
+	if expand {
+		opts = append(opts, dagger.ContainerWithMountedCacheOpts{Expand: expand})
 	}
 
-	return PendingMount{m, mnt}
+	return VolumeMount{
+		Cache: m,
+		Meta: MountMetadata{
+			Path:          path,
+			Key:           key,
+			PlatformAware: platformAware,
+		},
+		Volume: dag.CacheVolume(key),
+		Opts:   opts,
+	}
 }
 
 // +cache="session"
-func (pm PendingMount) Mount(ctx context.Context, ctr *dagger.Container) (*dagger.Container, error) {
-	platform, err := ctr.Platform(ctx)
+func (mnt VolumeMount) Mount(ctx context.Context, ctr *dagger.Container) (*dagger.Container, error) {
+	key, err := labelKey(ctx, ctr, mnt.Meta)
 	if err != nil {
 		return nil, err
 	}
 
-	pm.Mnt.Container = ctr
-	pm.Mnt.Platform = platform
-
-	f := func(vm *VolumeMount, t *VolumeMount) int { return strings.Compare(vm.Key, t.Key) }
-	if idx, exists := slices.BinarySearchFunc(pm.Cache.Mounts, pm.Mnt, f); !exists {
-		_, span := Tracer().Start(ctx, fmt.Sprintf("inserting at index [%d]", idx))
-		pm.Cache.Mounts = slices.Insert(pm.Cache.Mounts, idx, pm.Mnt)
-		telemetry.EndWithCause(span, nil)
-	}
-
-	// arch := strings.Split(string(pm.Mnt.Platform), "/")[1]
-	// key := fmt.Sprintf("%s-%s", pm.Mnt.Key, arch)
-	key := fmt.Sprintf("%s", pm.Mnt.Key)
-	dir, err := pm.Cache.Backend.Import(ctx, key)
+	dir, err := mnt.Cache.Backend.Import(ctx, key)
 	if err != nil {
-		return nil, err
+		return ctr, nil
 	}
 
-	// Copy contents of dir to cache
-	copyCtx, copySpan := Tracer().Start(ctx, "copyCache")
-	_, err = pm.Mnt.Container.
-		WithMountedCache(pm.Mnt.Path, pm.Mnt.Volume, pm.Mnt.Opts...).
-		WithMountedDirectory("/cache", dir).
-		WithExec([]string{"find", pm.Mnt.Path, "-mindepth", "1", "-delete"}).
+	ctr = ctr.WithMountedCache(mnt.Meta.Path, mnt.Volume, mnt.Opts...)
+
+	// Copy the contents of the imported cache directory into the cache volume.
+	copyCtx, copySpan := Tracer().Start(ctx, fmt.Sprintf("copyCache(name: %q)", key))
+	tmp := "/tmp/cache-import-" + mnt.Meta.Key
+	_, err = ctr.
+		WithMountedDirectory(tmp, dir).
+		WithExec([]string{"find", mnt.Meta.Path, "-mindepth", "1", "-delete"}).
 		WithExec([]string{
 			"cp",
 			"-r", // copy directory recursively
 			"-T", // avoid creating subdirectory
 			"-p", // preserve mode, ownership, and timestamps
-			"/cache",
-			pm.Mnt.Path,
+			tmp,
+			mnt.Meta.Path,
 		}).
+		WithoutMount(tmp).
 		Sync(copyCtx)
+	telemetry.EndWithCause(copySpan, &err)
 	if err != nil {
-		telemetry.EndWithCause(copySpan, &err)
-		return nil, err
+		return ctr, nil
 	}
-	telemetry.EndWithCause(copySpan, nil)
 
-	_, mountSpan := Tracer().Start(
-		ctx,
-		fmt.Sprintf("withMountedCache(path: %q, key: %q)", pm.Mnt.Path, pm.Mnt.Key),
-		trace.WithAttributes(
-			attribute.String("cache.path", pm.Mnt.Path),
-			attribute.String("cache.key", pm.Mnt.Key),
-		),
-	)
-	ctr = ctr.WithMountedCache(pm.Mnt.Path, pm.Mnt.Volume, pm.Mnt.Opts...)
-	telemetry.EndWithCause(mountSpan, nil)
+	metadata := MountMetadata{
+		Path:          mnt.Meta.Path,
+		Key:           mnt.Meta.Key,
+		PlatformAware: mnt.Meta.PlatformAware,
+	}
+	metadataJSON, err := json.Marshal(metadata)
+	if err != nil {
+		return ctr, nil
+	}
+
+	ctr = ctr.WithLabel(mountLabelPrefix+key, string(metadataJSON))
 
 	return ctr, nil
 }
 
 // +cache="session"
-func (m *RemoteCache) Export(ctx context.Context) error {
-	if len(m.Mounts) == 0 {
-		return nil
+func (m *RemoteCache) Export(ctx context.Context, ctr *dagger.Container) (*dagger.Container, error) {
+	ctr, err := ctr.Sync(ctx)
+	if err != nil {
+		return nil, err
 	}
 
-	ctx, span := Tracer().Start(ctx, "RemoteCache.export")
-	defer telemetry.EndWithCause(span, nil)
+	labels, err := ctr.Labels(ctx)
+	if err != nil {
+		return nil, err
+	}
 
-	for _, mnt := range m.Mounts {
-		arch := strings.Split(string(mnt.Platform), "/")[1]
-
-		_, prepSpan := Tracer().Start(ctx, fmt.Sprintf("prepare cache directory: %s", mnt.Path))
-		// Copy contents of cache to dir
-		dir := mnt.Container.
-			WithMountedCache(mnt.Path, mnt.Volume, mnt.Opts...).
-			WithExec([]string{"cp", "-rTp", mnt.Path, "/tmp/cache"}).
-			Directory("/tmp/cache")
-		telemetry.EndWithCause(prepSpan, nil)
-
-		key := fmt.Sprintf("%s-%s-%s", mnt.Path, mnt.Key, arch)
-		span.SetAttributes(attribute.String("cache.key", key))
-		if err := m.Backend.Export(ctx, key, dir); err != nil {
-			return err
+	for _, label := range labels {
+		labelName, err := label.Name(ctx)
+		if err != nil {
+			return nil, err
 		}
+
+		if !strings.HasPrefix(labelName, mountLabelPrefix) {
+			continue
+		}
+
+		_, exportSpan := Tracer().Start(ctx, fmt.Sprintf("exportCache(name: %q)", labelName))
+
+		labelValue, err := label.Value(ctx)
+		if err != nil {
+			telemetry.EndWithCause(exportSpan, &err)
+			return nil, err
+		}
+
+		var meta MountMetadata
+		if err := json.Unmarshal([]byte(labelValue), &meta); err != nil {
+			telemetry.EndWithCause(exportSpan, &err)
+			return nil, err
+		}
+		exportSpan.SetAttributes(
+			attribute.String("cache.path", meta.Path),
+			attribute.String("cache.key", meta.Key),
+		)
+
+		// Extract cache volume and copy to directory
+		key, err := labelKey(ctx, ctr, meta)
+		if err != nil {
+			return nil, err
+		}
+
+		tmp := "/tmp/cache-export-" + key
+		dir := ctr.
+			WithExec([]string{"cp", "-rTp", meta.Path, tmp}).
+			Directory(tmp)
+
+		if err := m.Backend.Export(ctx, key, dir); err != nil {
+			telemetry.EndWithCause(exportSpan, &err)
+			continue
+		}
+
+		// Remove label
+		ctr = ctr.WithoutLabel(labelName)
+
+		telemetry.EndWithCause(exportSpan, nil)
 	}
 
-	return nil
+	return ctr, nil
 }
 
-// +cache="session"
-func (m *RemoteCache) InlineExport(ctx context.Context, ctr *dagger.Container) (*dagger.Container, error) {
-	var err error
-	ctr, err = ctr.Sync(ctx)
+func labelKey(ctx context.Context, ctr *dagger.Container, meta MountMetadata) (string, error) {
+	moduleName, err := dag.CurrentModule().Name(ctx)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	err = m.Export(ctx)
-	if err != nil {
-		return nil, err
+
+	var platformSuffix string
+	if meta.PlatformAware {
+		platform, err := ctr.Platform(ctx)
+		if err != nil {
+			return "", err
+		}
+		platformSuffix = "-" + strings.ReplaceAll(string(platform), "/", "-")
 	}
-	return ctr, nil
+
+	return fmt.Sprintf("%s-%s%s", moduleName, meta.Key, platformSuffix), nil
 }
