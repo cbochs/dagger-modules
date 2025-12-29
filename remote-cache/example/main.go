@@ -33,20 +33,19 @@ func New(
 	}
 }
 
-// +cache="never"
+// +cache="session"
 func (m Example) PrimeCache(ctx context.Context) error {
 	_, err := dag.Container().
 		From("alpine").
 		WithEnvVariable("CACHEBUST", time.Now().String()).
 		With(m.Cache.CacheVolume("/example", m.CacheKey).Mount).
-		WithMountedCache("/todo", dag.CacheVolume("asdfasdf")).
 		WithExec([]string{"sh", "-c", "echo 'Hello, world' > /example/foo"}).
-		With(m.Cache.InlineExport).
+		With(m.Cache.Export).
 		Sync(ctx)
 	return err
 }
 
-// +cache="never"
+// +cache="session"
 func (m Example) CheckCache(ctx context.Context) (string, error) {
 	ctr := dag.Container().
 		From("alpine").
