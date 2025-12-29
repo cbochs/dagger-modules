@@ -33,7 +33,7 @@ func New(
 	}
 }
 
-// +cache="session"
+// +cache="never"
 func (m Example) PrimeCache(ctx context.Context) error {
 	_, err := dag.Container().
 		From("alpine").
@@ -41,15 +41,12 @@ func (m Example) PrimeCache(ctx context.Context) error {
 		With(m.Cache.CacheVolume("/example", m.CacheKey).Mount).
 		WithMountedCache("/todo", dag.CacheVolume("asdfasdf")).
 		WithExec([]string{"sh", "-c", "echo 'Hello, world' > /example/foo"}).
+		With(m.Cache.InlineExport).
 		Sync(ctx)
-	if err != nil {
-		return err
-	}
-
-	return m.Cache.Export(ctx)
+	return err
 }
 
-// +cache="session"
+// +cache="never"
 func (m Example) CheckCache(ctx context.Context) (string, error) {
 	ctr := dag.Container().
 		From("alpine").
