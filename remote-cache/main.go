@@ -38,7 +38,7 @@ func New(backend Backend) *RemoteCache {
 }
 
 // +cache="session"
-func (m *RemoteCache) CacheVolume(
+func (m *RemoteCache) Mount(
 	// Mount path.
 	path string,
 	// Cache volume key.
@@ -73,14 +73,20 @@ func (m *RemoteCache) CacheVolume(
 }
 
 // +cache="session"
-func (mnt VolumeMount) Mount(ctx context.Context, ctr *dagger.Container) (*dagger.Container, error) {
-	ctr = ctr.WithMountedCache(mnt.Meta.Path, mnt.Volume, mnt.Opts...)
-
-	// Copy the contents of the imported cache directory into the cache volume.
+func (mnt VolumeMount) AsCacheVolume(ctx context.Context, ctr *dagger.Container) (*dagger.Container, error) {
 	key, err := labelKey(ctx, ctr, mnt.Meta)
 	if err != nil {
 		return nil, err
 	}
+
+	metadataJSON, err := json.Marshal(mnt.Meta)
+	if err != nil {
+		return nil, err
+	}
+
+	ctr = ctr.
+		WithLabel(mountLabelPrefix+key, string(metadataJSON)).
+		WithMountedCache(mnt.Meta.Path, mnt.Volume, mnt.Opts...)
 
 	tmp := "/tmp/cache-import-" + key
 	dir := mnt.Cache.Backend.Import(ctx, key)
@@ -99,20 +105,27 @@ func (mnt VolumeMount) Mount(ctx context.Context, ctr *dagger.Container) (*dagge
 		WithoutMount(tmp).
 		Sync(ctx)
 	if err != nil {
-		return ctr, nil
+		return nil, err
 	}
 
-	metadata := MountMetadata{
-		Path:          mnt.Meta.Path,
-		Key:           mnt.Meta.Key,
-		PlatformAware: mnt.Meta.PlatformAware,
-	}
-	metadataJSON, err := json.Marshal(metadata)
+	return ctr, nil
+}
+
+// +cache="session"
+func (mnt VolumeMount) AsDirectory(ctx context.Context, ctr *dagger.Container) (*dagger.Container, error) {
+	key, err := labelKey(ctx, ctr, mnt.Meta)
 	if err != nil {
-		return ctr, nil
+		return nil, err
 	}
 
-	ctr = ctr.WithLabel(mountLabelPrefix+key, string(metadataJSON))
+	metadataJSON, err := json.Marshal(mnt.Meta)
+	if err != nil {
+		return nil, err
+	}
+
+	ctr = ctr.
+		WithLabel(mountLabelPrefix+key, string(metadataJSON)).
+		WithDirectory(mnt.Meta.Path, mnt.Cache.Backend.Import(ctx, key))
 
 	return ctr, nil
 }
