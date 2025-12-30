@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
 	"dagger/example/internal/dagger"
@@ -12,21 +14,9 @@ type Example struct {
 	CacheKey string              // +private
 }
 
-func New(
-	// +default="ttl.sh"
-	registry string, // +optional
-	// +default="8668e22b-07c9-4b90-b6de-e15738864818"
-	repo string, // +optional
-	// +optional
-	skipIfExists bool, // +optional
-	// +default="2h"
-	cacheKey string, // +optional
-) Example {
-	backend := dag.RemoteBackend().Registry(registry, repo)
+func New(registry string, repo string, cacheKey string) Example {
+	backend := dag.RemoteBackend().Registry(registry, strings.ToLower(repo))
 	cache := dag.RemoteCache(backend.AsRemoteCacheBackend())
-	// if skipIfExists {
-	// 	cache = cache.WithSkipIfExists()
-	// }
 
 	return Example{
 		Cache:    cache,
@@ -35,12 +25,15 @@ func New(
 }
 
 // +cache="session"
-func (m Example) PrimeCache(ctx context.Context) error {
+func (m Example) PrimeCache(
+	ctx context.Context,
+	msg string, // +default="Hello, world!"
+) error {
 	_, err := dag.Container().
 		From("alpine").
 		WithEnvVariable("CACHEBUST", time.Now().String()).
 		With(m.Cache.CacheVolume("/example", m.CacheKey).Mount).
-		WithExec([]string{"sh", "-c", "echo 'Hello, world' > /example/foo"}).
+		WithExec([]string{"sh", "-c", fmt.Sprintf("echo '%s' > /example/foo", msg)}).
 		With(m.Cache.Export).
 		Sync(ctx)
 	return err
