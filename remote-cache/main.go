@@ -90,7 +90,8 @@ func (mnt VolumeMount) AsCacheVolume(ctx context.Context, ctr *dagger.Container)
 	}
 
 	dir := mnt.Cache.Backend.Import(ctx, key)
-	if entr, _ := dir.Entries(ctx); len(entr) > 0 {
+	entries, err := dir.Entries(ctx)
+	if len(entries) > 0 {
 		meta.CacheExists = true
 	}
 
@@ -99,7 +100,6 @@ func (mnt VolumeMount) AsCacheVolume(ctx context.Context, ctr *dagger.Container)
 		return nil, err
 	}
 
-	tmp := "/tmp/cache-import-" + key
 	ctr = ctr.
 		WithLabel(mountLabelPrefix+key, string(metadataJSON)).
 		WithMountedCache(meta.Path, mnt.Volume, dagger.ContainerWithMountedCacheOpts{
@@ -107,21 +107,24 @@ func (mnt VolumeMount) AsCacheVolume(ctx context.Context, ctr *dagger.Container)
 			Expand: meta.Expand,
 		})
 
-	_, err = ctr.
-		WithMountedDirectory(tmp, dir).
-		WithExec([]string{"find", meta.Path, "-mindepth", "1", "-delete"}).
-		WithExec([]string{
-			"cp",
-			"-r", // copy directory recursively
-			"-T", // avoid creating subdirectory
-			"-p", // preserve mode, ownership, and timestamps
-			tmp,
-			meta.Path,
-		}).
-		WithoutMount(tmp).
-		Sync(ctx)
-	if err != nil {
-		return nil, err
+	if meta.CacheExists {
+		tmp := "/tmp/cache-import-" + key
+		_, err = ctr.
+			WithMountedDirectory(tmp, dir).
+			WithExec([]string{"find", meta.Path, "-mindepth", "1", "-delete"}).
+			WithExec([]string{
+				"cp",
+				"-r", // copy directory recursively
+				"-T", // avoid creating subdirectory
+				"-p", // preserve mode, ownership, and timestamps
+				tmp,
+				meta.Path,
+			}).
+			WithoutMount(tmp).
+			Sync(ctx)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return ctr, nil
@@ -137,7 +140,7 @@ func (mnt VolumeMount) AsDirectory(ctx context.Context, ctr *dagger.Container) (
 	}
 
 	dir := mnt.Cache.Backend.Import(ctx, key)
-	if entr, _ := dir.Entries(ctx); len(entr) > 0 {
+	if entries, _ := dir.Entries(ctx); len(entries) > 0 {
 		meta.CacheExists = true
 	}
 
