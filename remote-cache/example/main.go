@@ -32,7 +32,7 @@ func (m Example) PrimeCache(
 	_, err := dag.Container().
 		From("alpine").
 		WithEnvVariable("CACHEBUST", time.Now().String()).
-		With(m.Cache.Mount("/example", m.CacheKey).AsDirectory).
+		With(m.Cache.Mount("/example", m.CacheKey, dagger.RemoteCacheMountOpts{Force: true}).AsDirectory).
 		WithExec([]string{"sh", "-c", fmt.Sprintf("echo '%s' > /example/foo", msg)}).
 		With(m.Cache.Export).
 		Sync(ctx)
@@ -45,7 +45,8 @@ func (m Example) CheckCache(ctx context.Context) (string, error) {
 		From("alpine").
 		WithEnvVariable("CACHEBUST", time.Now().String()).
 		With(m.Cache.Mount("/example", m.CacheKey).AsDirectory).
-		WithExec([]string{"sh", "-c", "cat /example/foo || echo 'CACHE MISS'"})
+		WithExec([]string{"sh", "-c", "cat /example/foo || echo 'CACHE MISS'"}).
+		With(m.Cache.Export)
 
 	return ctr.Stdout(ctx)
 }
