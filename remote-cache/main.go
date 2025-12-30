@@ -19,16 +19,17 @@ type RemoteCache struct {
 }
 
 type VolumeMount struct {
-	Cache  *RemoteCache                           // +private
-	Meta   MountMetadata                          // +private
-	Volume *dagger.CacheVolume                    // +private
-	Opts   []dagger.ContainerWithMountedCacheOpts // +private
+	Cache  *RemoteCache        // +private
+	Meta   MountMetadata       // +private
+	Volume *dagger.CacheVolume // +private
 }
 
 type MountMetadata struct {
 	Path          string
 	Key           string
 	PlatformAware bool
+	Owner         string
+	Expand        bool
 	CacheExists   bool
 	ForceExport   bool
 }
@@ -69,12 +70,13 @@ func (m *RemoteCache) Mount(
 		Meta: MountMetadata{
 			Path:          path,
 			Key:           key,
+			Owner:         owner,
+			Expand:        expand,
 			PlatformAware: platformAware,
 			CacheExists:   false,
 			ForceExport:   force,
 		},
 		Volume: dag.CacheVolume(key),
-		Opts:   opts,
 	}
 }
 
@@ -100,7 +102,10 @@ func (mnt VolumeMount) AsCacheVolume(ctx context.Context, ctr *dagger.Container)
 	tmp := "/tmp/cache-import-" + key
 	ctr = ctr.
 		WithLabel(mountLabelPrefix+key, string(metadataJSON)).
-		WithMountedCache(meta.Path, mnt.Volume, mnt.Opts...)
+		WithMountedCache(meta.Path, mnt.Volume, dagger.ContainerWithMountedCacheOpts{
+			Owner:  meta.Owner,
+			Expand: meta.Expand,
+		})
 
 	_, err = ctr.
 		WithMountedDirectory(tmp, dir).
@@ -143,7 +148,10 @@ func (mnt VolumeMount) AsDirectory(ctx context.Context, ctr *dagger.Container) (
 
 	ctr = ctr.
 		WithLabel(mountLabelPrefix+key, string(metadataJSON)).
-		WithDirectory(meta.Path, dir)
+		WithDirectory(meta.Path, dir, dagger.ContainerWithDirectoryOpts{
+			Owner:  meta.Owner,
+			Expand: meta.Expand,
+		})
 
 	return ctr, nil
 }
