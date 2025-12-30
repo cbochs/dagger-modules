@@ -29,6 +29,8 @@ type MountMetadata struct {
 	Path          string
 	Key           string
 	PlatformAware bool
+	CacheExists   bool
+	ForceExport   bool
 }
 
 func New(backend Backend) *RemoteCache {
@@ -51,6 +53,8 @@ func (m *RemoteCache) Mount(
 	expand bool,
 	// +optional
 	platformAware bool,
+	// +optional
+	force bool,
 ) VolumeMount {
 	var opts []dagger.ContainerWithMountedCacheOpts
 	if owner != "" {
@@ -66,6 +70,8 @@ func (m *RemoteCache) Mount(
 			Path:          path,
 			Key:           key,
 			PlatformAware: platformAware,
+			CacheExists:   false,
+			ForceExport:   force,
 		},
 		Volume: dag.CacheVolume(key),
 		Opts:   opts,
@@ -74,33 +80,38 @@ func (m *RemoteCache) Mount(
 
 // +cache="session"
 func (mnt VolumeMount) AsCacheVolume(ctx context.Context, ctr *dagger.Container) (*dagger.Container, error) {
-	key, err := labelKey(ctx, ctr, mnt.Meta)
+	meta := mnt.Meta
+
+	key, err := labelKey(ctx, ctr, meta)
 	if err != nil {
 		return nil, err
 	}
 
-	metadataJSON, err := json.Marshal(mnt.Meta)
+	dir := mnt.Cache.Backend.Import(ctx, key)
+	if entr, _ := dir.Entries(ctx); len(entr) > 0 {
+		meta.CacheExists = true
+	}
+
+	metadataJSON, err := json.Marshal(meta)
 	if err != nil {
 		return nil, err
 	}
-
-	ctr = ctr.
-		WithLabel(mountLabelPrefix+key, string(metadataJSON)).
-		WithMountedCache(mnt.Meta.Path, mnt.Volume, mnt.Opts...)
 
 	tmp := "/tmp/cache-import-" + key
-	dir := mnt.Cache.Backend.Import(ctx, key)
+	ctr = ctr.
+		WithLabel(mountLabelPrefix+key, string(metadataJSON)).
+		WithMountedCache(meta.Path, mnt.Volume, mnt.Opts...)
 
 	_, err = ctr.
 		WithMountedDirectory(tmp, dir).
-		WithExec([]string{"find", mnt.Meta.Path, "-mindepth", "1", "-delete"}).
+		WithExec([]string{"find", meta.Path, "-mindepth", "1", "-delete"}).
 		WithExec([]string{
 			"cp",
 			"-r", // copy directory recursively
 			"-T", // avoid creating subdirectory
 			"-p", // preserve mode, ownership, and timestamps
 			tmp,
-			mnt.Meta.Path,
+			meta.Path,
 		}).
 		WithoutMount(tmp).
 		Sync(ctx)
@@ -113,19 +124,26 @@ func (mnt VolumeMount) AsCacheVolume(ctx context.Context, ctr *dagger.Container)
 
 // +cache="session"
 func (mnt VolumeMount) AsDirectory(ctx context.Context, ctr *dagger.Container) (*dagger.Container, error) {
-	key, err := labelKey(ctx, ctr, mnt.Meta)
+	meta := mnt.Meta
+
+	key, err := labelKey(ctx, ctr, meta)
 	if err != nil {
 		return nil, err
 	}
 
-	metadataJSON, err := json.Marshal(mnt.Meta)
+	dir := mnt.Cache.Backend.Import(ctx, key)
+	if entr, _ := dir.Entries(ctx); len(entr) > 0 {
+		meta.CacheExists = true
+	}
+
+	metadataJSON, err := json.Marshal(meta)
 	if err != nil {
 		return nil, err
 	}
 
 	ctr = ctr.
 		WithLabel(mountLabelPrefix+key, string(metadataJSON)).
-		WithDirectory(mnt.Meta.Path, mnt.Cache.Backend.Import(ctx, key))
+		WithDirectory(meta.Path, dir)
 
 	return ctr, nil
 }
@@ -145,7 +163,7 @@ func (m *RemoteCache) Export(ctx context.Context, ctr *dagger.Container) (*dagge
 	for _, label := range labels {
 		labelName, err := label.Name(ctx)
 		if err != nil {
-			return nil, err
+			continue // Don't err on export
 		}
 
 		if !strings.HasPrefix(labelName, mountLabelPrefix) {
@@ -157,23 +175,32 @@ func (m *RemoteCache) Export(ctx context.Context, ctr *dagger.Container) (*dagge
 		labelValue, err := label.Value(ctx)
 		if err != nil {
 			telemetry.EndWithCause(exportSpan, &err)
-			return nil, err
+			continue // Don't err on export
 		}
 
 		var meta MountMetadata
 		if err := json.Unmarshal([]byte(labelValue), &meta); err != nil {
 			telemetry.EndWithCause(exportSpan, &err)
-			return nil, err
+			continue // Don't err on export
 		}
 		exportSpan.SetAttributes(
 			attribute.String("cache.path", meta.Path),
 			attribute.String("cache.key", meta.Key),
 		)
 
-		// Extract cache volume and copy to directory
 		key, err := labelKey(ctx, ctr, meta)
 		if err != nil {
-			return nil, err
+			continue // Don't err on export
+		}
+
+		// Skip export for existing cache entries
+		if meta.CacheExists && !meta.ForceExport {
+			telemetry.EndWithCause(exportSpan, nil)
+
+			_, skipSpan := Tracer().Start(ctx, fmt.Sprintf("cache exists for %q, skipping", key))
+			telemetry.EndWithCause(skipSpan, nil)
+
+			continue
 		}
 
 		tmp := "/tmp/cache-export-" + key
@@ -183,7 +210,7 @@ func (m *RemoteCache) Export(ctx context.Context, ctr *dagger.Container) (*dagge
 
 		if err := m.Backend.Export(ctx, key, dir); err != nil {
 			telemetry.EndWithCause(exportSpan, &err)
-			continue
+			continue // Don't err on export
 		}
 
 		// Remove label
