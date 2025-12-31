@@ -156,7 +156,6 @@ func (mnt VolumeMount) AsDirectory(ctx context.Context, ctr *dagger.Container) (
 	return ctr, nil
 }
 
-// +cache="session"
 func (m *RemoteCache) Export(ctx context.Context, ctr *dagger.Container) (*dagger.Container, error) {
 	ctr, err := ctr.Sync(ctx)
 	if err != nil {
