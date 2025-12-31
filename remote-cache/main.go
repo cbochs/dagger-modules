@@ -18,6 +18,12 @@ type RemoteCache struct {
 	Backend Backend // +private
 }
 
+type Backend interface {
+	DaggerObject
+	Import(ctx context.Context, key string) *dagger.Directory
+	Export(ctx context.Context, key string, dir *dagger.Directory) error
+}
+
 type VolumeMount struct {
 	Cache  *RemoteCache        // +private
 	Meta   MountMetadata       // +private
