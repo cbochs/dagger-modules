@@ -35,7 +35,6 @@ func (m *RemoteBackend) Registry(
 	}
 }
 
-// +cache="session"
 func (b *Registry) Import(ctx context.Context, key string) *dagger.Directory {
 	imageAddr := cacheImageAddr(b.Registry, b.Repo, key)
 
@@ -52,7 +51,6 @@ func (b *Registry) Import(ctx context.Context, key string) *dagger.Directory {
 	return ctr.Directory("")
 }
 
-// +cache="session"
 func (b *Registry) Export(ctx context.Context, key string, dir *dagger.Directory) error {
 	imageAddr := cacheImageAddr(b.Registry, b.Repo, key)
 	_, err := dag.Container().WithDirectory("", dir).Publish(ctx, imageAddr)

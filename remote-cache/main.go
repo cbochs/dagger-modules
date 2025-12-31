@@ -40,7 +40,6 @@ func New(backend Backend) *RemoteCache {
 	}
 }
 
-// +cache="session"
 func (m *RemoteCache) Mount(
 	// Mount path.
 	path string,
@@ -80,7 +79,6 @@ func (m *RemoteCache) Mount(
 	}
 }
 
-// +cache="session"
 func (mnt VolumeMount) AsCacheVolume(ctx context.Context, ctr *dagger.Container) (*dagger.Container, error) {
 	meta := mnt.Meta
 
@@ -130,7 +128,6 @@ func (mnt VolumeMount) AsCacheVolume(ctx context.Context, ctr *dagger.Container)
 	return ctr, nil
 }
 
-// +cache="session"
 func (mnt VolumeMount) AsDirectory(ctx context.Context, ctr *dagger.Container) (*dagger.Container, error) {
 	meta := mnt.Meta
 
