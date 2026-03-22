@@ -12,10 +12,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Dagger CLI
-        run: curl -fsSL https://dl.dagger.io/dagger/install.sh | BIN_DIR=/usr/local/bin sh
-        env:
-          DAGGER_VERSION: "0.20.3"
-
-      - name: Verify Dagger engine connection
-        run: dagger version
+      # _EXPERIMENTAL_DAGGER_RUNNER_HOST is injected into the runner pod by ARC,
+      # pointing to the node-local Dagger engine socket. The action picks this up
+      # automatically and skips spinning up its own engine.
+      - uses: dagger/dagger-for-github@v8.4.1
+        with:
+          version: "v0.20.3"
+          verb: "functions"
+          workdir: "./remote-cache"
