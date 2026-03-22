@@ -1,0 +1,21 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: k3s-dagger
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Dagger CLI
+        run: curl -fsSL https://dl.dagger.io/dagger/install.sh | BIN_DIR=/usr/local/bin sh
+        env:
+          DAGGER_VERSION: "0.20.3"
+
+      - name: Verify Dagger engine connection
+        run: dagger version
