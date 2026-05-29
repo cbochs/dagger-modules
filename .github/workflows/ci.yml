@@ -17,6 +17,6 @@ jobs:
       # automatically and skips spinning up its own engine.
       - uses: dagger/dagger-for-github@v8.4.1
         with:
-          version: "v0.20.3"
-          verb: "functions"
-          workdir: "./remote-cache"
+          version: v0.21.0
+          verb: functions
+          workdir: ./remote-cache
